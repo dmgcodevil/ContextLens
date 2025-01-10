@@ -1,0 +1,38 @@
+<products>
+    <product>
+        <type>laptop</type>
+        <make>lenovo</make>
+        <model>IdeaPad 3i</model>
+        <screen>
+            <size>15</size>
+        </screen>
+        <cpu>Core i7-1255U</cpu>
+        <ram>16GB</ram>
+        <storage>
+            <size>512GB</size>
+            <type>SSD</type>
+        </storage>
+        <color>Arctic Grey</color>
+        <os>windows</os>
+        <price>999.0</price>
+    </product>
+
+    <product>
+        <type>laptop</type>
+        <make>Asus</make>
+        <model>Zenbook</model>
+        <screen>
+            <size>15.6</size>
+        </screen>
+        <cpu>AMD Ryzen 5</cpu>
+        <ram>16GB</ram>
+        <storage>
+            <size>512GB</size>
+            <type>SSD</type>
+        </storage>
+        <color>Ponder Blue</color>
+        <os>windows</os>
+        <price>499.99</price>
+    </product>
+
+</products>

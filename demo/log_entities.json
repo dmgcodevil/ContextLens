@@ -1,0 +1,130 @@
+{
+    "nodes": [
+        {
+            "id": "76e5ce0c-03ce-42b6-be6d-2931ec2c2b03",
+            "format": "text",
+            "tuples": [
+                {
+                    "path": "span(line:1:65:71)",
+                    "value": "33333",
+                    "source_value": "33333",
+                    "label": "USER_ID",
+                    "value_type": "int"
+                },
+                {
+                    "path": "span(line:1:35:39)",
+                    "value": "alex",
+                    "source_value": "Alex",
+                    "label": "USER",
+                    "value_type": "string"
+                },
+                {
+                    "path": "span(line:1:46:52)",
+                    "value": "lenovo",
+                    "source_value": "Lenovo",
+                    "label": "PRODUCT_MAKE",
+                    "value_type": "string"
+                },
+                {
+                    "path": "span(line:1:53:61)",
+                    "value": "ideapad",
+                    "source_value": "IdeaPad",
+                    "label": "PRODUCT_MODEL",
+                    "value_type": "string"
+                },
+                {
+                    "path": "span(line:1:69:72)",
+                    "value": "15",
+                    "source_value": "15",
+                    "label": "PRODUCT_SCREEN_SIZE",
+                    "value_type": "int"
+                },
+                {
+                    "path": "span(line:1:80:85)",
+                    "value": "999.0",
+                    "source_value": "999.0",
+                    "label": "TRANSACTION_AMOUNT",
+                    "value_type": "double"
+                },
+                {
+                    "path": "span(line:1:89:99)",
+                    "value": "01-06-2025",
+                    "source_value": "01-06-2025",
+                    "label": "TRANSACTION_DATE",
+                    "value_type": "date"
+                },
+                {
+                    "path": "span(line:1:117:122)",
+                    "value": "11111",
+                    "source_value": "11111",
+                    "label": "TRANSACTION_ID",
+                    "value_type": "int"
+                }
+            ],
+            "file_path": "./demo/log"
+        },
+        {
+            "id": "8606d0b4-2725-41f6-9116-5243897e1a74",
+            "format": "text",
+            "tuples": [
+                {
+                    "path": "span(line:2:35:38)",
+                    "value": "bob",
+                    "source_value": "Bob",
+                    "label": "USER",
+                    "value_type": "string"
+                },
+                {
+                    "path": "span(line:2:43:48)",
+                    "value": "44444",
+                    "source_value": "44444",
+                    "label": "USER_ID",
+                    "value_type": "int"
+                },
+                {
+                    "path": "span(line:2:54:58)",
+                    "value": "asus",
+                    "source_value": "ASUS",
+                    "label": "PRODUCT_MAKE",
+                    "value_type": "string"
+                },
+                {
+                    "path": "span(line:2:61:68)",
+                    "value": "zenbook",
+                    "source_value": "Zenbook",
+                    "label": "PRODUCT_MODEL",
+                    "value_type": "string"
+                },
+                {
+                    "path": "span(line:2:70:74)",
+                    "value": "15.6",
+                    "source_value": "15.6",
+                    "label": "PRODUCT_SCREEN_SIZE",
+                    "value_type": "double"
+                },
+                {
+                    "path": "span(line:2:89:95)",
+                    "value": "499.99",
+                    "source_value": "499.99",
+                    "label": "TRANSACTION_AMOUNT",
+                    "value_type": "double"
+                },
+                {
+                    "path": "span(line:2:99:109)",
+                    "value": "01-07-2025",
+                    "source_value": "01-07-2025",
+                    "label": "TRANSACTION_DATE",
+                    "value_type": "date"
+                },
+                {
+                    "path": "span(line:2:117:122)",
+                    "value": "22222",
+                    "source_value": "22222",
+                    "label": "TRANSACTION_ID",
+                    "value_type": "int"
+                }
+            ],
+            "file_path": "./demo/log"
+        }
+    ]
+}
