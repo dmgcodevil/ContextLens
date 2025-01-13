@@ -1,7 +1,7 @@
 {
-    "nodes": [
+    "rows": [
         {
-            "id": "6a90e84e-5399-4566-a3d1-291954165e76",
+            "id": "transactions-1",
             "format": "json",
             "tuples": [
                 {
@@ -29,7 +29,7 @@
             "file_path": "./demo/transactions.json"
         },
         {
-            "id": "c909de72-df87-447d-aed7-f9a616647316",
+            "id": "transactions-2",
             "format": "json",
             "tuples": [
                 {

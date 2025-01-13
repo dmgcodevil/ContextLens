@@ -1,7 +1,7 @@
 {
-    "nodes": [
+    "rows": [
         {
-            "id": "76e5ce0c-03ce-42b6-be6d-2931ec2c2b03",
+            "id": "log-1",
             "format": "text",
             "tuples": [
                 {
@@ -27,8 +27,8 @@
                 },
                 {
                     "path": "span(line:1:53:61)",
-                    "value": "ideapad",
-                    "source_value": "IdeaPad",
+                    "value": "ideapad 3i",
+                    "source_value": "IdeaPad 3i",
                     "label": "PRODUCT_MODEL",
                     "value_type": "string"
                 },
@@ -64,7 +64,7 @@
             "file_path": "./demo/log"
         },
         {
-            "id": "8606d0b4-2725-41f6-9116-5243897e1a74",
+            "id": "log-2",
             "format": "text",
             "tuples": [
                 {

@@ -1,7 +1,7 @@
 {
-    "nodes": [
+    "rows": [
         {
-            "id": "21fe00aa-a858-4347-be1a-28db4698b20f",
+            "id": "inventory-1",
             "format": "xml",
             "tuples": [
                 {
@@ -85,7 +85,7 @@
             "file_path": "./demo/inventory.xml"
         },
         {
-            "id": "1ea1637f-181f-4c96-a8ad-1230e75fd76e",
+            "id": "inventory-2",
             "format": "xml",
             "tuples": [
                 {
