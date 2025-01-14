@@ -7,7 +7,7 @@ from abc import ABC
 from dataclasses import dataclass
 from enum import IntEnum, Enum
 from typing import List, Dict, Set
-
+from collections import defaultdict
 from openai import OpenAI
 
 # constants
@@ -138,6 +138,7 @@ class Node:
     row_id: str
     tuple_index: int
     token_index: int
+    token_hash: int
     value: str
     source_value: str
 
@@ -146,6 +147,16 @@ class Node:
 class Bucket:
     label: Label
     nodes: Dict[HashcodeT, List[Node]]
+    connected: Dict[RowIdT, Dict[RowIdT, int]]  # row_id -> connected row + tuple match count
+
+    def connect(self, row_id1: RowIdT, row_id2: RowIdT):
+        if row_id1 != row_id2:
+            if row_id1 not in self.connected:
+                self.connected[row_id1] = defaultdict(int)
+            if row_id2 not in self.connected:
+                self.connected[row_id2] = defaultdict(int)
+            self.connected[row_id1][row_id2] += 1
+            self.connected[row_id2][row_id1] += 1
 
 
 @dataclass
@@ -192,27 +203,35 @@ class Graph:
 
     def get_directly_connected_rows_with_scores(self, row: Row) -> Dict[str, float]:
         res = {}
-        for candidate in self.rows.values():
-            if candidate.id != row.id:
-                score = strength(row, candidate)
-                if score > 0:
-                    if candidate.id in res:
-                        raise ValueError(f'duplicate candidate row id={candidate.id}')
-                    res[candidate.id] = score
+        for label in row.unique_labels():
+            bucket = self.buckets[label]
+            if row.id in bucket.connected:
+                for id, match_count in bucket.connected[row.id].items():
+                    if id not in res:
+                        res[id] = 0
+                    res[id] = res[id] + match_count
         return res
 
     def add_tuple(self, row_id: str, t: Tuple, tuple_index: int):
         if t.label not in self.buckets:
-            self.buckets[t.label] = Bucket(label=t.label, nodes=dict())
+            self.buckets[t.label] = Bucket(label=t.label, nodes=dict(), connected=dict())
         token_hashes = t.token_hashes()
-        if len(token_hashes) > 1:
+        if len(token_hashes) > 2:
             print(f'multy-token tuple. row_id={row_id}, tuple_index={tuple_index}, tuple_value={t.value}')
         for token_index, token_hash in enumerate(t.token_hashes()):
             if token_hash not in self.buckets[t.label].nodes:
                 self.buckets[t.label].nodes[token_hash] = []
             self.buckets[t.label].nodes[token_hash].append(
-                Node(row_id=row_id, tuple_index=tuple_index, token_index=token_index, value=t.value,
+                Node(row_id=row_id, tuple_index=tuple_index, token_index=token_index,
+                     token_hash=token_hash,
+                     value=t.value,
                      source_value=t.source_value))
+
+            bucket = self.buckets[t.label]
+            for n in bucket.nodes[token_hash]:
+                if n.row_id != row_id:
+                    print(f'connect label={t.label.name} ,{n.row_id}->{row_id}')
+                    bucket.connect(n.row_id, row_id)
 
     def add_row(self, row: Row):
         if row.id in self.rows:
@@ -303,11 +322,13 @@ class Graph:
                     return SearchResult(score=current_score, row_id=current_row_id, t=t)
 
             # Explore connected rows, i.e. rows that share the same labels
-            connected_row_ids = self.get_rows_ids_by_labels(self.rows[current_row_id].unique_labels())
-            print(f'connected_row_ids={connected_row_ids}')
-            for next_row_id in connected_row_ids:
+            candidates = self.get_directly_connected_rows_with_scores(self.rows[current_row_id])
+            sorted_candidates = sorted(candidates, key=candidates.get, reverse=True)
+
+            print(f'connected_row_ids={sorted_candidates}')
+            for next_row_id in sorted_candidates:
                 if next_row_id != curr_row_id:
-                    local_score = strength(self.rows[current_row_id], self.rows[next_row_id])
+                    local_score = candidates[next_row_id]
 
                     # Bonus for selected matches
                     selected_score = strength_tuples(self.rows[next_row_id].tuples, list(selected.values()),
