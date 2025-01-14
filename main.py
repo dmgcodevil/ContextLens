@@ -77,6 +77,8 @@ class Type(Enum):
 # tuples are entities extracted from the input
 @dataclass(frozen=True)
 class Tuple:
+    row_id: str
+    index: int
     path: str
     value: str
     source_value: str
@@ -131,6 +133,12 @@ class Row:
     def __repr__(self):
         return (f"Row(id={self.id}, tuples={self.tuples}, format={self.format.name}"
                 f"file_path={self.file_path})")
+
+
+@dataclass
+class DataRow:
+    score: float
+    tuples: List[Tuple]
 
 
 @dataclass
@@ -531,11 +539,15 @@ def append_suffix_to_filename(file_path, suffix, separator="_"):
     return os.path.join(dir_name, new_file_name)
 
 
-def merge(graph: Graph, columns: List[Label], row_filter=None) -> List[List[Tuple]]:
+def merge(graph: Graph,
+          primary_key: Set[Label],
+          columns: List[Label], row_filter=None) -> List[DataRow]:
     if row_filter is None:
         row_filter = set()
-    table = []
+    table = {}  # primary key: (score,row)
+    unique = set()
     for row in graph.rows.values():
+        total_score = 0.0
         if len(row_filter) == 0 or row.id in row_filter:
             selected_rows = set()
             selected: Dict[Label, Tuple] = {}
@@ -549,12 +561,15 @@ def merge(graph: Graph, columns: List[Label], row_filter=None) -> List[List[Tupl
                     res = graph.find_best_tuple(col, row.id, selected)
                     print(f'merge res={res}, selected_rows={selected_rows}')
                     print('=' * 100)
-                    selected[col] = res.t if res else Tuple(path="N/A", value="N/A", source_value="N/A",
+                    selected[col] = res.t if res else Tuple("N/A", 0, path="N/A", value="N/A", source_value="N/A",
                                                             value_type=Type.UNKNOWN, label=col)
                     if res:
+                        total_score += res.score
                         selected_rows.add(res.row_id)
-            table.append([selected[col] for col in columns])
-    return table
+            key = "|".join([selected[col].value for col in primary_key])
+            if key not in table or total_score > table[key].score:
+                table[key] = DataRow(score=total_score, tuples=[selected[col] for col in columns])
+    return list(table.values())
 
 
 def call_openai(prompt: str, model: str = "gpt-4o") -> dict:
@@ -744,9 +759,11 @@ def doc_to_rows(data) -> List[Row]:
     for node_data in data["rows"]:
         row = Row(id=node_data["id"], tuples=[], format=Format(node_data["format"]),
                   file_path=node_data["file_path"])
-        for tuple_data in node_data["tuples"]:
+        for tuple_index, tuple_data in enumerate(node_data["tuples"]):
             row.tuples.append(
                 Tuple(
+                    row_id=row.id,
+                    index=tuple_index,
                     path=tuple_data["path"],
                     value=tuple_data["value"],
                     source_value=tuple_data["source_value"],
@@ -778,18 +795,20 @@ def extract_entities(file_path: str, labels: List[Label]) -> List[Row]:
     extracted_data = call_openai(prompt)
     end_time = time.time()
     execution_time = end_time - start_time
-    for node_data in extracted_data["rows"]:
-        node_data["id"] = str(uuid.uuid4())
+    for row_data in extracted_data["rows"]:
+        row_data["id"] = str(uuid.uuid4())
     print(f'file={file_path}, took={execution_time:.4f} seconds, extracted entities={extracted_data}')
     entities_file_path = append_suffix_to_filename(file_path, "entities") + ".json"
     save_dict_as_json(entities_file_path, extracted_data)
 
-    nodes = []
-    for node_data in extracted_data["rows"]:
-        node = Row(id=node_data["id"], tuples=[], format=file_format, file_path=file_path)
-        for tuple_data in node_data["tuples"]:
-            node.tuples.append(
+    rows = []
+    for row_data in extracted_data["rows"]:
+        row = Row(id=row_data["id"], tuples=[], format=file_format, file_path=file_path)
+        for tuple_index, tuple_data in enumerate(row_data["tuples"]):
+            row.tuples.append(
                 Tuple(
+                    row_id=row.id,
+                    index=tuple_index,
                     path=tuple_data["path"],
                     value=tuple_data["value"],
                     source_value=tuple_data["source_value"],
@@ -797,9 +816,9 @@ def extract_entities(file_path: str, labels: List[Label]) -> List[Row]:
                     label=Label[tuple_data["label"]]
                 )
             )
-        nodes.append(node)
+        rows.append(row)
 
-    return nodes
+    return rows
 
 
 def load_entities(file_paths: List[str]) -> List[Row]:
@@ -841,9 +860,9 @@ if __name__ == '__main__':
     ]
     graph.debug_info()
 
-    result = merge(graph, columns, row_filter={"transactions-1", "transactions-2"})
-    for record in result:
+    result = merge(graph, {Label.TRANSACTION_ID}, columns)
+    for row in result:
         record_str = []
-        for t in record:
+        for t in row.tuples:
             record_str.append(f'({t.label.name},{t.source_value})')
-        print(",".join(record_str))
+        print(f'score={row.score}' + ",".join(record_str))
