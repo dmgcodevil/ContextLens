@@ -137,6 +137,7 @@ class Row:
 
 @dataclass
 class DataRow:
+    id: str
     score: float
     tuples: List[Tuple]
 
@@ -176,6 +177,7 @@ class SearchResult:
 
 def strength_tuples(tuples1: List[Tuple], tuples2: List[Tuple], gain: float = DEFAULT_MATCH_GAIN) -> float:
     total_strength = 0.0
+    # todo a tuple with larger value should have bonus
     for t1 in tuples1:
         for t2 in tuples2:
             if t1.label == t2.label:
@@ -540,12 +542,11 @@ def append_suffix_to_filename(file_path, suffix, separator="_"):
 
 
 def merge(graph: Graph,
-          primary_key: Set[Label],
-          columns: List[Label], row_filter=None) -> List[DataRow]:
-    if row_filter is None:
-        row_filter = set()
+          columns: List[Label], **kwargs) -> List[DataRow]:
+    row_filter = set()
+    if "row_filter" in kwargs:
+        row_filter = kwargs["row_filter"]
     table = {}  # primary key: (score,row)
-    unique = set()
     for row in graph.rows.values():
         total_score = 0.0
         if len(row_filter) == 0 or row.id in row_filter:
@@ -553,22 +554,21 @@ def merge(graph: Graph,
             selected: Dict[Label, Tuple] = {}
             for col in columns:
                 if col not in selected:
-                    current_t = row.find_tuple_by_label(col)
-                    if current_t:
-                        selected[col] = current_t
-                        continue
-
                     res = graph.find_best_tuple(col, row.id, selected)
                     print(f'merge res={res}, selected_rows={selected_rows}')
                     print('=' * 100)
-                    selected[col] = res.t if res else Tuple("N/A", 0, path="N/A", value="N/A", source_value="N/A",
-                                                            value_type=Type.UNKNOWN, label=col)
                     if res:
                         total_score += res.score
-                        selected_rows.add(res.row_id)
-            key = "|".join([selected[col].value for col in primary_key])
+                        selected[col] = res.t
+                    else:
+                        existing = row.find_tuple_by_label(col)
+                        selected[col] = existing if existing else Tuple("N/A", 0, path="N/A", value="N/A",
+                                                                        source_value="N/A",
+                                                                        value_type=Type.UNKNOWN, label=col)
+            key = "|".join([selected[col].value for col in columns])
             if key not in table or total_score > table[key].score:
-                table[key] = DataRow(score=total_score, tuples=[selected[col] for col in columns])
+                table[key] = DataRow(id=row.id, score=total_score, tuples=[selected[col] for col in columns])
+    # print("\n".join(table.keys()))
     return list(table.values())
 
 
@@ -860,9 +860,10 @@ if __name__ == '__main__':
     ]
     graph.debug_info()
 
-    result = merge(graph, {Label.TRANSACTION_ID}, columns)
+    result = merge(graph, columns)
     for row in result:
         record_str = []
         for t in row.tuples:
-            record_str.append(f'({t.label.name},{t.source_value})')
-        print(f'score={row.score}' + ",".join(record_str))
+            record_str.append(f'({t.label.name},{t.value})')
+        metadata = f'score={row.score}, row_id={row.id}'
+        print(metadata + ",".join(record_str))
