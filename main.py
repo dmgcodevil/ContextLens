@@ -9,9 +9,10 @@ from enum import IntEnum, Enum
 from typing import List, Dict, Set
 from collections import defaultdict
 from openai import OpenAI
+import re
 
 # constants
-DEFAULT_MATCH_GAIN = 1.0
+DEFAULT_TUPLE_MATCH_GAIN = 1.0
 SELECTED_MATCH_GAIN = 1.5
 PATH_PENALTY = 0.1
 
@@ -49,6 +50,10 @@ class Label(IntEnum):
     PRODUCT_PRICE = 18
     ID = 19
 
+    L1 = 20
+    L2 = 21
+    L3 = 22
+
 
 class Input(ABC):
     pass
@@ -74,6 +79,16 @@ class Type(Enum):
     UNKNOWN = "unknown"
 
 
+class Tokenizer:
+    """
+    Simple whitespace and punctuation tokenizer.
+    """
+
+    @staticmethod
+    def tokenize(value: str) -> List[str]:
+        return value.lower().split()
+
+
 # tuples are entities extracted from the input
 @dataclass(frozen=True)
 class Tuple:
@@ -84,29 +99,35 @@ class Tuple:
     source_value: str
     value_type: Type
     label: Label
+    tokens: Dict[str, int]
+    tokens_hashes: Set[int]
+    weight: float
 
-    def tokenized_values(self) -> List[str]:
-        """
-        Tokenize the value for more flexible matching.
-        Simple whitespace and punctuation tokenizer.
-        """
-        tokens = self.value.lower().split()
-        return tokens
-
-    def token_hashes(self) -> List[int]:
-        """
-        Generate hashes for each token combined with the label.
-        """
-        return [hash((token, self.label)) for token in self.tokenized_values()]
+    @classmethod
+    def create(cls, row_id: str, index: int, path: str, value: str,
+               source_value: str, value_type: Type,
+               label: Label,
+               weight: float):
+        tokens = set(Tokenizer.tokenize(value))  # dedup tokens
+        hashed_tokens = {}
+        tokens_hashes = set()
+        for token in tokens:
+            hashed_tokens[token] = hash(token)
+            tokens_hashes.add(hashed_tokens[token])
+        return cls(row_id, index, path, value, source_value, value_type,
+                   label, hashed_tokens, tokens_hashes, weight)
 
     def __repr__(self):
         return (
             f"Tuple("
+            f"row_id='{self.row_id}', "
             f"path='{self.path}', "
             f"value='{self.value}', "
+            f"tokens='{self.tokens}', "
             f"source_value='{self.source_value}', "
             f"value_type={self.value_type.name}, "
-            f"label={self.label.name}"
+            f"label={self.label.name}, "
+            f"weight={self.weight}"
             f")"
         )
 
@@ -131,7 +152,7 @@ class Row:
         return None
 
     def __repr__(self):
-        return (f"Row(id={self.id}, tuples={self.tuples}, format={self.format.name}"
+        return (f"Row(id={self.id}, tuples={self.tuples}, format={self.format.name}, "
                 f"file_path={self.file_path})")
 
 
@@ -139,14 +160,14 @@ class Row:
 class DataRow:
     id: str
     score: float
-    tuples: List[Tuple]
+    values: Dict[Label, List[Tuple]]
 
 
 @dataclass
 class Node:
     row_id: str
     tuple_index: int
-    token_index: int
+    # token_index: int
     token_hash: int
     value: str
     source_value: str
@@ -171,22 +192,125 @@ class Bucket:
 @dataclass
 class SearchResult:
     score: float
-    row_id: str
-    t: Tuple
+    tuples: List[Tuple]
 
 
-def strength_tuples(tuples1: List[Tuple], tuples2: List[Tuple], gain: float = DEFAULT_MATCH_GAIN) -> float:
+def strength_tuple(t1: Tuple, t2: Tuple, gain: float = DEFAULT_TUPLE_MATCH_GAIN) -> float:
+    """
+    score is calculated as |t1.tokens ∩ t2.tokens |
+    we say
+        T1(value="a", tokens="a b")
+        T2(value="a", tokens="a b c")
+        T3(value="a", tokens="a c")
+
+    score(T1,T2) > score(T1,T3)
+
+    each tuple has weight associated with it
+    we add weights from both tuples to the final score
+    """
+    if t1.label != t2.label:
+        return 0.0
+    score = len(t1.tokens_hashes | t2.tokens_hashes) * gain
+    if score > 0.0:
+        score += (t1.weight + t2.weight)
+    return score
+
+
+def strength_tuples(tuples1: List[Tuple], tuples2: List[Tuple], gain: float = DEFAULT_TUPLE_MATCH_GAIN) -> float:
     total_strength = 0.0
-    # todo a tuple with larger value should have bonus
     for t1 in tuples1:
         for t2 in tuples2:
             if t1.label == t2.label:
-                if t1.value == t2.value:
-                    total_strength += gain
+                total_strength += strength_tuple(t1, t2, gain)
     return total_strength
 
 
-def strength(row1: Row, row2: Row, gain: float = DEFAULT_MATCH_GAIN) -> float:
+def best_strength_tuple(t1: Tuple, tuples2: List[Tuple], gain: float = DEFAULT_TUPLE_MATCH_GAIN) -> float:
+    best_score = 0.0
+    for t2 in tuples2:
+        best_score = max(best_score, strength_tuple(t1, t2, gain))
+    return best_score
+
+
+def strength_selected(tuples: List[Tuple], selected: Dict[Label, List[Tuple]]) -> float:
+    """
+    Calculates the total strength of a list of tuples (`tuples`) with respect to a selected dictionary (`selected`).
+
+    The strength is computed by iterating over each tuple `t1` in `tuples` and checking if its label exists in
+    the keys of `selected`. For each matching label, the function computes the highest possible strength score
+    between `t1` and all tuples associated with the label in `selected`, considering a specified gain factor.
+
+    The highest score for a label is added to the total strength, ensuring that the most significant match
+    contributes to the result.
+
+    Formally, the total strength is given by:
+
+        total_strength = Σ (max_strength(t1, selected[L])) for all t1 ∈ tuples, where:
+            - L = t1.label
+            - max_strength(t1, selected[L]) = max(best_strength_tuple(t1, t2, gain) for t2 ∈ selected[L])
+
+    Parameters:
+        tuples (List[Tuple]): A list of tuples to evaluate for strength.
+        selected (Dict[Label, List[Tuple]]): A dictionary where keys are labels and values are lists of tuples
+                                             representing pre-selected matches for the labels.
+
+    Returns:
+        float: The total strength score, which is the sum of the best-matching strength for each tuple in `tuples`.
+
+    Notes:
+        - This function assumes `best_strength_tuple` is defined and handles the scoring logic for individual tuples.
+        - `SELECTED_MATCH_GAIN` is used as the gain factor when computing strength.
+
+    """
+    total_strength = 0.0
+    for t1 in tuples:
+        if t1.label in selected:
+            total_strength += best_strength_tuple(t1, selected[t1.label], SELECTED_MATCH_GAIN)
+
+    return total_strength
+
+
+def is_perfect(tuples: List[Tuple], selected: Dict[Label, List[Tuple]]) -> bool:
+    """
+    Determines if a given list of tuples is "perfect" with respect to a selected dictionary.
+
+    A list of tuples is considered "perfect" if, for every label `L` in the keys of `selected`,
+    there exists a tuple `t1` in `tuples` such that:
+
+        1. `t1.label == L` (matching label).
+        2. `t1.value == t2.value` for some `t2` in `selected[L]` (strictly matching value).
+
+    Formally, for each label `L` in `selected.keys()`:
+
+        ∃ t1 ∈ tuples, ∃ t2 ∈ selected[L] such that:
+            t1.label = L and t1.value = t2.value
+
+    Returns:
+        bool: True if `tuples` satisfies the above conditions for all labels in `selected`,
+              otherwise False.
+
+    Parameters:
+        tuples (List[Tuple]): A list of tuples to check for perfection.
+        selected (Dict[Label, List[Tuple]]): A dictionary where keys are labels and values
+                                             are lists of tuples to match against.
+
+    Example:
+        tuples = [Tuple(label=L1, value="A"), Tuple(label=L2, value="B")]
+        selected = {L1: [Tuple(label=L1, value="A")], L2: [Tuple(label=L2, value="B")]}
+
+        is_perfect(tuples, selected)  # Returns True
+    """
+    matched_labels = set()
+    for t1 in tuples:
+        if t1.label in selected:
+            for t2 in selected[t1.label]:
+                if t1.value == t2.value:
+                    matched_labels.add(t1.label)
+                    break
+    return len(selected.keys()) == len(matched_labels)
+
+
+def strength(row1: Row, row2: Row, gain: float = DEFAULT_TUPLE_MATCH_GAIN) -> float:
     return strength_tuples(row1.tuples, row2.tuples, gain)
 
 
@@ -213,26 +337,35 @@ class Graph:
 
     def get_directly_connected_rows_with_scores(self, row: Row) -> Dict[str, float]:
         res = {}
+        ids = set()
         for label in row.unique_labels():
             bucket = self.buckets[label]
             if row.id in bucket.connected:
-                for id, match_count in bucket.connected[row.id].items():
-                    if id not in res:
-                        res[id] = 0
-                    res[id] = res[id] + match_count
+                ids.update(bucket.connected[row.id].keys())
+        if row.id in ids:
+            raise ValueError(f"row_id {row.id} connected to itself")
+        for id in ids:
+            res[id] = strength_tuples(row.tuples, self.rows[id].tuples)
+        # old approach that doesn't take into account tuple weight
+        # for label in row.unique_labels():
+        #     bucket = self.buckets[label]
+        #     if row.id in bucket.connected:
+        #         for id, match_count in bucket.connected[row.id].items():
+        #             if id not in res:
+        #                 res[id] = 0
+        #             res[id] = res[id] + match_count
         return res
 
     def add_tuple(self, row_id: str, t: Tuple, tuple_index: int):
         if t.label not in self.buckets:
             self.buckets[t.label] = Bucket(label=t.label, nodes=dict(), connected=dict())
-        token_hashes = t.token_hashes()
-        if len(token_hashes) > 2:
+        if len(t.tokens_hashes) > 2:
             print(f'multy-token tuple. row_id={row_id}, tuple_index={tuple_index}, tuple_value={t.value}')
-        for token_index, token_hash in enumerate(t.token_hashes()):
+        for token_index, token_hash in t.tokens.items():
             if token_hash not in self.buckets[t.label].nodes:
                 self.buckets[t.label].nodes[token_hash] = []
             self.buckets[t.label].nodes[token_hash].append(
-                Node(row_id=row_id, tuple_index=tuple_index, token_index=token_index,
+                Node(row_id=row_id, tuple_index=tuple_index,
                      token_hash=token_hash,
                      value=t.value,
                      source_value=t.source_value))
@@ -259,59 +392,8 @@ class Graph:
             ids.update(self.get_rows_ids_by_label(label))
         return ids
 
-    def _bfs_find_best(self, start_row: str, curr_row_id: str, label: Label, selected: Dict[Label, Tuple],
+    def _bfs_find_best(self, start_row: str, curr_row_id: str, label: Label, selected: Dict[Label, List[Tuple]],
                        initial_score) -> SearchResult | None:
-
-        """
-            Perform a weighted BFS to find the row containing the specified label with the highest
-            total score, starting from a candidate row and initial score.
-
-            This method uses a max-heap (implemented by pushing negative scores) to prioritize paths
-            with the greatest "score so far." Once a row that contains the target label is encountered,
-            the search terminates, returning that row's tuple for the label.
-
-            Args:
-                start_row (str):
-                    The ID of the row from which this BFS search is conceptually "originating."
-                    Used to mark that row as visited initially (to avoid revisiting it).
-                curr_row_id (str):
-                    The row ID where we begin the actual BFS expansions. This is enqueued in the
-                    priority queue with 'initial_score'.
-                label (Label):
-                    The target label we want to locate. Once we reach a row that has this label,
-                    we return its tuple.
-                selected (Dict[Label, Tuple]):
-                    A dictionary of already chosen label-value pairs for the row we're trying to complete.
-                    Rows that match these pairs receive an extra bonus (SELECTED_MATCH_GAIN).
-                initial_score (float):
-                    The initial cumulative score assigned to `curr_row_id` when pushed into the queue.
-                    This can incorporate local strength from the source row or a bonus for perfect matches.
-
-            Returns:
-                Optional[SearchResult]:
-                    A SearchResult object if we successfully find a row containing `label`, along with
-                    the BFS-accumulated score and the tuple for that label. If no such row is found,
-                    returns `None`.
-
-            Algorithm Details:
-                1. We store states in a priority queue (pq) as (-score, row_id, path_length).
-                   This ensures that the highest score is always popped first (since we use negative scores).
-                2. We mark 'start_row' as visited initially, so we don't circle back to it.
-                3. For each row we pop:
-                   - If it's already visited, skip it.
-                   - Otherwise, mark visited and check if it contains the target label:
-                     * If so, return the current SearchResult (with 'current_score').
-                   - If not, compute local_strength and selected-match bonuses for each connected neighbor,
-                     subtract a path penalty (PATH_PENALTY * path_length), and enqueue the neighbor state
-                     with the updated cumulative score.
-                4. If we exhaust the queue with no row containing the target label, return None.
-
-            Complexity:
-                - Let N be the number of rows. In the worst case, we may enqueue up to O(N) states.
-                - Each BFS pop leads to checking neighbors, which can be up to O(N) in a fully connected graph.
-                - Total worst-case time could be O(N^2) for dense graphs, though often sparser connectivity
-                  or early termination leads to better practical performance.
-            """
 
         pq = []
         visited = set()
@@ -329,7 +411,7 @@ class Graph:
             # Check if current row contains the target label
             for t in self.rows[current_row_id].tuples:
                 if t.label == label:
-                    return SearchResult(score=current_score, row_id=current_row_id, t=t)
+                    return SearchResult(score=current_score, tuples=[t])
 
             # Explore connected rows, i.e. rows that share the same labels
             candidates = self.get_directly_connected_rows_with_scores(self.rows[current_row_id])
@@ -341,8 +423,7 @@ class Graph:
                     local_score = candidates[next_row_id]
 
                     # Bonus for selected matches
-                    selected_score = strength_tuples(self.rows[next_row_id].tuples, list(selected.values()),
-                                                     SELECTED_MATCH_GAIN)
+                    selected_score = strength_selected(self.rows[next_row_id].tuples, selected)
 
                     # Apply path penalty
                     path_penalty = path_length * PATH_PENALTY
@@ -363,115 +444,32 @@ class Graph:
                     break
         return count == len(filter)
 
-    def find_best_tuple(self, label: Label, source_row_id: str, selected: Dict[Label, Tuple]) -> None | SearchResult:
-        """
-            Attempt to find the best tuple for a given label within the graph, starting from the specified
-            source row and taking into account already selected label-value pairs.
-
-            This method implements a two-phase strategy:
-              1. Identify "perfect rows," which are rows that fully match all label-values in `selected`.
-                 These perfect rows are explored via BFS first, each with an initial score equal to
-                 the size of `selected`.
-              2. If no perfect row yields a valid result, we look at the rows directly connected to
-                 the `source_row` (sorted by their local strength score), and run BFS from them,
-                 giving each a combined initial score (local strength + selected-match bonus).
-
-            Args:
-                label (Label):
-                    The target label (e.g., L1, L2, etc.) for which we want to find the best matching
-                    row.
-                source_row_id (str):
-                    The ID of the row from which we conceptually initiate the search. We only want
-                    to fill a missing label for this row.
-                selected (Dict[Label, Tuple]):
-                    A dictionary of label-value pairs that have already been chosen for the
-                    `source_row`. Rows matching these pairs gain an extra bonus when BFS expansions
-                    are scored.
-
-            Returns:
-                Optional[SearchResult]:
-                    A SearchResult object if the BFS discovers a row that contains the requested
-                    label, or None if no such row (with label `label`) is found. The SearchResult
-                    includes:
-                      - The final BFS-accumulated `score` for that path.
-                      - The `row_id` of the discovered row containing `label`.
-                      - The tuple `t` from that row matching the label.
-
-            Algorithm Steps:
-                1. **Perfect Rows**:
-                   - We iterate over all rows, checking if each one fully matches every
-                     label-value in `selected`.
-                   - Those that match are considered "perfect," and BFS is called on each with
-                     an initial score equal to `len(selected)`.
-                   - We keep track of the highest-scoring BFS result from this set.
-
-                2. **Directly Connected Rows**:
-                   - If no satisfactory tuple is found from perfect rows, we compute local
-                     strength scores between `source_row` and its directly connected neighbors.
-                   - We sort these neighbors in descending order of local strength, and run BFS
-                     from each, adding a bonus for how many items they match from `selected`.
-                   - We again track the highest-scoring BFS result.
-
-                3. We pick the best BFS outcome from either phase:
-                   - If BFS finds a row that has `label`, we compare its final BFS `score` to any
-                     existing best result. If it's higher, we store it.
-                   - We return once all candidates are processed or we confirm a row with the best
-                     final score.
-
-            Example:
-                Suppose `source_row_id` = "R2" is missing label L2, and we have `selected` =
-                {L1: (L1, "V1", ...), L3: (L3, "V3", ...)}. First, we find rows that fully match
-                both (L1, V1) and (L3, V3). If none match, we get all neighbors of R2, sort them,
-                and BFS from each with their local strength + selected-match bonus. The BFS expansions
-                incorporate path penalties and synergy scores. Ultimately, we pick the row whose BFS
-                expansions yield the highest final score for label L2.
-
-            Side Effects:
-                - Debug prints show the BFS expansions and the best result found for the label.
-
-            Complexity:
-                - Phase 1 (finding perfect rows) is O(N) where N is the total number of rows.
-                - Phase 2, for each directly connected candidate, we do a BFS. In the worst case,
-                  BFS might visit many rows. However, BFS typically terminates early if it finds
-                  a row containing `label`.
-                - This approach is often efficient for smaller or moderately sized graphs, or if
-                  the BFS expansions typically find matching rows quickly.
-
-            Note:
-                - This function internally calls `_bfs_find_best(...)` to perform the BFS with
-                  an initial score. If both phases yield no solution (no row found with `label`),
-                  it returns None.
-
-            See Also:
-                - `_bfs_find_best`: The BFS function that calculates scores and expansions.
-                - `strength_tuples`: Used to check how many label-value pairs match between two
-                  sets of tuples.
-            """
+    def find_best_tuple(self, label: Label, source_row_id: str,
+                        selected: Dict[Label, List[Tuple]]) -> None | SearchResult:
         print(f'Finding best value for label={label.name}, row_id={source_row_id}, selected={selected.values()}')
         if label not in self.buckets:
             return None
 
-        best_result: SearchResult | None = None
+        best_result = SearchResult(score=0.0, tuples=[])
         # Step 1: Select starting rows based on selected
         # rows that fully match `selected` are called: perfect
         # We treat these perfect rows as high-priority BFS starts with an initial score of |selected|
-        perfect_rows = set()
+        perfect_rows = {}  # id -> score
         if len(selected) > 0:
             for candidate in self.rows.values():
                 if candidate.id != source_row_id and \
-                        strength_tuples(candidate.tuples, list(selected.values())) == len(selected):
-                    perfect_rows.add(candidate.id)
+                        is_perfect(candidate.tuples, selected):
+                    perfect_rows[candidate.id] = strength_selected(candidate.tuples, selected)
 
         # check perfect rows first
         for row_id in perfect_rows:
-            res = self._bfs_find_best(source_row_id, row_id, label, selected, len(selected))
-            if res:
-                # all perfect rows have same initial score = len(selected)
-                # thus we are looking for result with the highest score
-                if not best_result or res.score > best_result.score:
-                    best_result = res
+            res = self._bfs_find_best(source_row_id, row_id, label, selected, perfect_rows[row_id])
+            if res.score > best_result.score:
+                best_result = res
+            elif res.score == best_result.score:
+                best_result.tuples.extend(res.tuples)
 
-        if best_result:
+        if len(best_result.tuples) > 0:
             # we found a tuple from perfect rows
             print(f'Found best value from perfect rows={perfect_rows}. label={label.name}, source row={source_row_id}: '
                   f'best result={best_result}')
@@ -487,16 +485,13 @@ class Graph:
         # we process rows in order: highest to lowest score
         for row_id in sorted_candidates:
             res = self._bfs_find_best(source_row_id, row_id, label, selected, candidates[row_id]
-                                      + strength_tuples(self.rows[row_id].tuples, list(selected.values()),
-                                                        SELECTED_MATCH_GAIN)
+                                      + strength_selected(self.rows[row_id].tuples, selected)
                                       )
-            if res:
-                if not best_result or res.score > best_result.score:
-                    print(f'Found better value for label={label.name}, row={source_row_id}: old={best_result}, '
-                          f'new: {res}')
-                    best_result = res
-
-        if best_result:
+            if res.score > best_result.score:
+                best_result = res
+            elif res.score == best_result.score:
+                best_result.tuples.extend(res.tuples)
+        if len(best_result.tuples) > 0:
             print(
                 f'Found best value for label={label.name}, row={source_row_id}: best_result{best_result}')
         else:
@@ -546,28 +541,29 @@ def merge(graph: Graph,
     row_filter = set()
     if "row_filter" in kwargs:
         row_filter = kwargs["row_filter"]
-    table = {}  # primary key: (score,row)
+    table = {}  # primary key ->? (score,row)
     for row in graph.rows.values():
         total_score = 0.0
         if len(row_filter) == 0 or row.id in row_filter:
             selected_rows = set()
-            selected: Dict[Label, Tuple] = {}
+            selected: Dict[Label, List[Tuple]] = {}
             for col in columns:
                 if col not in selected:
                     res = graph.find_best_tuple(col, row.id, selected)
-                    print(f'merge res={res}, selected_rows={selected_rows}')
+                    print(f'merge label={col} result={res}, selected_rows={selected_rows}')
                     print('=' * 100)
                     if res:
                         total_score += res.score
-                        selected[col] = res.t
+                        selected[col] = res.tuples
                     else:
+                        # if we couldn't find a value use it from current row
                         existing = row.find_tuple_by_label(col)
-                        selected[col] = existing if existing else Tuple("N/A", 0, path="N/A", value="N/A",
-                                                                        source_value="N/A",
-                                                                        value_type=Type.UNKNOWN, label=col)
-            key = "|".join([selected[col].value for col in columns])
+                        selected[col] = [existing] if existing else [Tuple.create("N/A", 0, path="N/A", value="N/A",
+                                                                                  source_value="N/A",
+                                                                                  value_type=Type.UNKNOWN, label=col)]
+            key = "|".join([str(selected[col]) for col in columns])
             if key not in table or total_score > table[key].score:
-                table[key] = DataRow(id=row.id, score=total_score, tuples=[selected[col] for col in columns])
+                table[key] = DataRow(id=row.id, score=total_score, values=selected)
     # print("\n".join(table.keys()))
     return list(table.values())
 
@@ -830,40 +826,90 @@ def load_entities(file_paths: List[str]) -> List[Row]:
     return nodes
 
 
+def parse_rows(input_text: str, initial_weights={}) -> List[Row]:
+    rows = []
+    pattern = re.compile(r"(R\d+)=\[(.*?)\]")  # matches R1=[(L1,V1)]
+    tuple_pattern = re.compile(r"\((L\d+),([^)]+)\)")  # matches (L1,V1)
+
+    for match in pattern.finditer(input_text):
+        row_id = match.group(1)  # extract row ID, e.g., R1
+        tuple_str = match.group(2)  # extract tuples, e.g., (L1,V1), (L2,V2)
+
+        tuples = []
+        for index, tuple_match in enumerate(tuple_pattern.finditer(tuple_str)):
+            label = tuple_match.group(1)  # extract label, e.g., L1
+            value = tuple_match.group(2)  # extract value, e.g., V1
+            weight = 0.0
+            if row_id in initial_weights and index in initial_weights[row_id]:
+                weight = initial_weights[row_id][index]
+            tuples.append(Tuple.create(
+                row_id=row_id,
+                index=index,
+                path="",
+                value=value,
+                source_value=value,
+                value_type=Type.STRING,
+                label=getattr(Label, label),
+                weight=weight
+            ))
+
+        rows.append(Row(id=row_id, tuples=tuples, format=Format.TEXT, file_path=""))
+
+    return rows
+
+
 if __name__ == '__main__':
-    labels_list = [label for label in Label]
-    # extract_entities("./demo/transactions.json", labels_list)
-    # print(nodes)
-    rows = load_entities([
-        "./demo/transactions_entities.json",
-        "./demo/log_entities.json",
-        "./demo/inventory_entities.json"
-    ])
+    input = """
+    R1=[(L1,V1)]
+    R2=[(L1,V1), (L2,V2)]
+    R3=[(L1,V1), (L2,V3)]
+    """
 
-    for row in rows:
-        print(row)
+    initial_weights = {
+        "R3": {0: 0.1}
+    }
 
+    rows = parse_rows(input, initial_weights)
     graph = create_graph(rows)
-    print("BUCKETS:")
-    for bucket in graph.buckets.values():
-        print(bucket)
-    columns = [
-        Label.TRANSACTION_ID,
-        Label.TRANSACTION_DATE,
-        Label.TRANSACTION_AMOUNT,
-        Label.USER,
-        Label.USER_ID,
-        Label.PRODUCT_MAKE,
-        Label.PRODUCT_MODEL,
-        Label.PRODUCT_PRICE
 
-    ]
-    graph.debug_info()
+    print(rows)
+    result = merge(graph, [Label.L1, Label.L2], row_filter={"R1"})
 
-    result = merge(graph, columns)
-    for row in result:
-        record_str = []
-        for t in row.tuples:
-            record_str.append(f'({t.label.name},{t.value})')
-        metadata = f'score={row.score}, row_id={row.id}'
-        print(metadata + ",".join(record_str))
+    print(result)
+
+    # labels_list = [label for label in Label]
+    # # extract_entities("./demo/transactions.json", labels_list)
+    # # print(nodes)
+    # rows = load_entities([
+    #     "./demo/transactions_entities.json",
+    #     "./demo/log_entities.json",
+    #     "./demo/inventory_entities.json"
+    # ])
+    #
+    # for row in rows:
+    #     print(row)
+    #
+    # graph = create_graph(rows)
+    # print("BUCKETS:")
+    # for bucket in graph.buckets.values():
+    #     print(bucket)
+    # columns = [
+    #     Label.TRANSACTION_ID,
+    #     Label.TRANSACTION_DATE,
+    #     Label.TRANSACTION_AMOUNT,
+    #     Label.USER,
+    #     Label.USER_ID,
+    #     Label.PRODUCT_MAKE,
+    #     Label.PRODUCT_MODEL,
+    #     Label.PRODUCT_PRICE
+    #
+    # ]
+    # graph.debug_info()
+    #
+    # result = merge(graph, columns)
+    # for row in result:
+    #     record_str = []
+    #     for v in row.values:
+    #         record_str.append(f'({v})')
+    #     metadata = f'score={row.score}, row_id={row.id}'
+    #     print(metadata + ",".join(record_str))
