@@ -1,4 +1,4 @@
-# A BFS-Based Algorithm for Merging Rows with Selected-Match Gain and Path Penalty
+# A Context-Aware Graph-Based Algorithm for Merging Rows (Entities) with Selected-Match Gain and Path Penalty
 
 ## Abstract
 
