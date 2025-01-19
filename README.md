@@ -6,7 +6,7 @@ We present a graph driven algorithm for merging partially overlapping rows into 
 
 This algorithm provides a cost-effective, fine-tunable alternative to Retrieval-Augmented Generation (RAG) for entity consolidation tasks, especially in domains requiring interpretable, deterministic outputs and minimal reliance on pre-trained models. Its two-phase approach—prioritizing "perfect rows" (those fully matching partial merges) before exploring other candidates—achieves efficient and high-quality merges. We include examples, pseudo-code, and a proof of correctness, demonstrating its practical applicability in use cases such as entity resolution, log analysis, and structured data enrichment.
 
-### For more detail information please read the [paper]()
+### For more detail information please read the [paper](https://github.com/dmgcodevil/ContextLens/blob/main/contex-aware-row-merge.pdf)
 
 
 Glossary:
