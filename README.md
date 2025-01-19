@@ -49,6 +49,43 @@ R2: [(L1,V2), (L3,V3), (L4,V5), (L5,V6)]
 ````
 
 
+## Real-World Application: Entity Consolidation from Text Files
+
+Imagine you are working with a collection of text files, either structured (e.g., CSVs or JSON) or unstructured (e.g., raw text), all related to a specific context—such as "Finance." Your goal is to merge the information from these files into a single, coherent table that can be stored in a database and queried efficiently.
+
+Steps to Achieve This:
+
+1. Entity Extraction:
+   Use named entity recognition (NER) tools or other data extraction techniques to identify entities (e.g., organizations, transactions, or monetary values) from the raw text. Each entity is represented as a row with label-value tuples, such as:
+
+```
+R1 = [(Label: Company, Value: "XYZ Corp"), (Label: Amount, Value: "$500M")]
+```
+
+2. Entity Merging:
+   The extracted entities from different files often overlap or are incomplete. For instance, one file might mention "XYZ Corp" with its market cap, while another references the same company with details about revenue. Using the Context-Aware Graph-Based Algorithm, you can:
+* Merge rows that share common tuples or context (e.g., "XYZ Corp").
+* Fill in missing labels for a given row by resolving values from connected rows in the graph.
+
+3. Creating a Unified Table:
+   After merging, the algorithm produces a clean, unified table for specific labels/columns, such as "Company," "Market Cap," and "Revenue." For example:
+```
+Final Table:
+-----------------------------------------------------
+| Company    | Market Cap   | Revenue   | Country   |
+-----------------------------------------------------
+| XYZ Corp   | $500M        | $50M      | USA       |
+| ABC Inc.   | $300M        | $25M      | UK        |
+-----------------------------------------------------
+```
+
+Benefits:
+
+* Efficiency: Automates the process of consolidating entities, saving manual effort.
+* Customizability: Allows fine-tuning via scoring parameters like tuple weight and path penalty.
+* Scalability: Can be parallelized or adapted for distributed environments to handle large datasets.
+
+
 
 ## How to run demo
 
