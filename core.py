@@ -1,14 +1,19 @@
 import heapq
 import json
+import logging
 import re
 from collections import defaultdict
 from dataclasses import dataclass
 from enum import IntEnum, Enum
 from typing import List, Dict, Set
-import logging
 
 logger = logging.getLogger("CustomLogger")
 logger.setLevel(logging.DEBUG)
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
 
 # constants
 DEFAULT_TUPLE_MATCH_GAIN = 1.0
@@ -389,7 +394,7 @@ class Graph:
         if t.label not in self.buckets:
             self.buckets[t.label] = Bucket(label=t.label, nodes=dict(), connected=dict())
         if len(t.tokens_hashes) > 2:
-            print(f'multy-token tuple. row_id={row_id}, tuple_index={tuple_index}, tuple_value={t.value}')
+            logger.debug(f'multy-token tuple. row_id={row_id}, tuple_index={tuple_index}, tuple_value={t.value}')
         for token_index, token_hash in t.tokens.items():
             if token_hash not in self.buckets[t.label].nodes:
                 self.buckets[t.label].nodes[token_hash] = []
@@ -402,7 +407,7 @@ class Graph:
             bucket = self.buckets[t.label]
             for n in bucket.nodes[token_hash]:
                 if n.row_id != row_id:
-                    print(f'connect label={t.label.name} ,{n.row_id}->{row_id}')
+                    logger.debug(f'connect label={t.label.name} ,{n.row_id}->{row_id}')
                     bucket.connect(n.row_id, row_id)
 
     def add_row(self, row: Row):
@@ -467,7 +472,7 @@ class Graph:
             candidates = self.get_directly_connected_rows_with_scores(self.rows[current_row_id])
             sorted_candidates = sorted(candidates, key=candidates.get, reverse=True)
 
-            print(f'connected_row_ids={sorted_candidates}')
+            logger.debug(f'connected_row_ids={sorted_candidates}')
             for next_row_id in sorted_candidates:
                 if next_row_id != curr_row_id:
                     local_score = candidates[next_row_id]
@@ -506,7 +511,7 @@ class Graph:
                 - Perfect rows are initialized with a score equal to the number of selected label-value pairs.
                 - If multiple tuples have the same highest score, all are included in the result.
         """
-        print(f'Finding best value for label={label.name}, row_id={source_row_id}, selected={selected.values()}')
+        logger.debug(f'Finding best value for label={label.name}, row_id={source_row_id}, selected={selected.values()}')
         if label not in self.buckets:
             return None
 
@@ -531,8 +536,9 @@ class Graph:
 
         if len(best_result.tuples) > 0:
             # we found a tuple from perfect rows
-            print(f'Found best value from perfect rows={perfect_rows}. label={label.name}, source row={source_row_id}: '
-                  f'best result={best_result}')
+            logger.debug(
+                f'Found best value from perfect rows={perfect_rows}. label={label.name}, source row={source_row_id}: '
+                f'best result={best_result}')
             return best_result
 
         # Step2: try directly connected rows
@@ -541,7 +547,7 @@ class Graph:
         candidates = self.get_directly_connected_rows_with_scores(source_row)
         # sort candidates by their scores in descending order
         sorted_candidates = sorted(candidates, key=candidates.get, reverse=True)
-        print(f'candidates={sorted_candidates}')
+        logger.debug(f'candidates={sorted_candidates}')
         # we process rows in order: highest to lowest score
         for row_id in sorted_candidates:
             res = self._bfs_find_best(source_row_id, row_id, label, selected, candidates[row_id]
@@ -552,10 +558,10 @@ class Graph:
             elif res.score == best_result.score:
                 best_result.tuples.extend(res.tuples)
         if len(best_result.tuples) > 0:
-            print(
+            logger.debug(
                 f'Found best value for label={label.name}, row={source_row_id}: best_result{best_result}')
         else:
-            print(f'No valid value found for label={label.name}, row={source_row_id}')
+            logger.debug(f'No valid value found for label={label.name}, row={source_row_id}')
 
         return best_result
 
@@ -565,7 +571,7 @@ class Graph:
             for nodes in bucket.nodes.values():
                 for n in nodes:
                     row_ids.add(n.row_id)
-            print(f'bucket {label.name} has rows: {row_ids}')
+            logger.debug(f'bucket {label.name} has rows: {row_ids}')
 
 
 def create_graph(rows: List[Row]) -> Graph:
@@ -610,8 +616,8 @@ def merge(graph: Graph,
             for col in columns:
                 if col not in selected:
                     res = graph.find_best_tuple(col, row.id, selected)
-                    print(f'merge label={col} result={res}, selected_rows={selected_rows}')
-                    print('=' * 100)
+                    logger.debug(f'merge label={col} result={res}, selected_rows={selected_rows}')
+                    logger.debug('=' * 100)
                     if res:
                         total_score += res.score
                         selected[col] = res.tuples
@@ -631,7 +637,7 @@ def merge(graph: Graph,
             key = "|".join(values)
             if key not in table or total_score > table[key].score:
                 table[key] = DataRow(id=row.id, score=total_score, values=selected)
-        print("\n".join(table.keys()))
+        logger.debug("\n".join(table.keys()))
     return list(table.values())
 
 
@@ -697,61 +703,3 @@ def _parse_rows(input_text: str, initial_weights={}) -> List[Row]:
         rows.append(Row(id=row_id, tuples=tuples, format=Format.TEXT, file_path=""))
 
     return rows
-
-
-if __name__ == '__main__':
-    # input = """
-    # R1=[(L1,V1)]
-    # R2=[(L1,V1), (L2,V2)]
-    # R3=[(L1,V1), (L2,V3)]
-    # """
-    #
-    # initial_weights = {
-    #     "R3": {0: 0.1}
-    # }
-    #
-    # rows = parse_rows(input, initial_weights)
-    # graph = create_graph(rows)
-    #
-    # print(rows)
-    # result = merge(graph, [Label.L1, Label.L2], row_filter={"R1"})
-    #
-    # print(result)
-
-    labels_list = [label for label in Label]
-    # extract_entities("./demo/transactions.json", labels_list)
-    # print(nodes)
-    rows = load_entities([
-        "./demo/transactions_entities.json",
-        "./demo/log_entities.json",
-        "./demo/inventory_entities.json"
-    ])
-
-    for row in rows:
-        print(row)
-
-    graph = create_graph(rows)
-    print("BUCKETS:")
-    for bucket in graph.buckets.values():
-        print(bucket)
-    columns = [
-        Label.TRANSACTION_ID,
-        Label.TRANSACTION_DATE,
-        Label.TRANSACTION_AMOUNT,
-        Label.USER,
-        Label.USER_ID,
-        Label.PRODUCT_MAKE,
-        Label.PRODUCT_MODEL,
-        Label.PRODUCT_PRICE
-
-    ]
-    graph.debug_info()
-
-    result = merge(graph, columns)
-    for row in result:
-        record_str = []
-        for label, tuples in row.values.items():
-            value_str = ",".join(map(lambda t: f"({t.row_id},{t.source_value})", tuples))
-            record_str.append(f'({label.name}: [{value_str}])')
-        metadata = f'score={row.score}, row_id={row.id}'
-        print(metadata + ",".join(record_str))
