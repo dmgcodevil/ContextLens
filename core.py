@@ -21,6 +21,7 @@ SELECTED_MATCH_GAIN = 1.5
 PATH_PENALTY = 0.1
 
 # type aliases
+Label = str
 RowIdT = str
 BucketIdT = str
 HashcodeT = int
@@ -31,32 +32,6 @@ class Format(Enum):
     XML = "xml"
     CSV = "csv"
     TEXT = "text"
-
-
-class Label(IntEnum):
-    DATE = 1
-    TRANSACTION_ID = 2
-    TRANSACTION_AMOUNT = 3
-    TRANSACTION_DATE = 4
-    TRANSACTION_ACCOUNT = 5
-    USER = 6
-    USER_ID = 7
-    PRODUCT_TYPE = 8
-    PRODUCT_MAKE = 9
-    PRODUCT_MODEL = 10
-    PRODUCT_SCREEN_SIZE = 11
-    PRODUCT_CPU = 12
-    PRODUCT_RAM = 13
-    PRODUCT_STORAGE_SIZE = 14
-    PRODUCT_STORAGE_TYPE = 15
-    PRODUCT_COLOR = 16
-    PRODUCT_OS = 17
-    PRODUCT_PRICE = 18
-    ID = 19
-
-    L1 = 20
-    L2 = 21
-    L3 = 22
 
 
 class Type(Enum):
@@ -115,7 +90,7 @@ class Tuple:
             f"tokens='{self.tokens}', "
             f"source_value='{self.source_value}', "
             f"value_type={self.value_type.name}, "
-            f"label={self.label.name}, "
+            f"label={self.label}, "
             f"weight={self.weight}"
             f")"
         )
@@ -156,10 +131,9 @@ class DataRow:
 class Node:
     row_id: str
     tuple_index: int
-    # token_index: int
     token_hash: int
-    value: str
-    source_value: str
+    value: str  # for debugging only
+    source_value: str  # for debugging only
 
 
 @dataclass
@@ -407,7 +381,7 @@ class Graph:
             bucket = self.buckets[t.label]
             for n in bucket.nodes[token_hash]:
                 if n.row_id != row_id:
-                    logger.debug(f'connect label={t.label.name} ,{n.row_id}->{row_id}')
+                    logger.debug(f'connect label={t.label} ,{n.row_id}->{row_id}')
                     bucket.connect(n.row_id, row_id)
 
     def add_row(self, row: Row):
@@ -426,8 +400,8 @@ class Graph:
             ids.update(self.get_rows_ids_by_label(label))
         return ids
 
-    def _bfs_find_best(self, start_row: str, curr_row_id: str, label: Label, selected: Dict[Label, List[Tuple]],
-                       initial_score) -> SearchResult | None:
+    def bfs_find_best(self, start_row: str, curr_row_id: str, label: Label, selected: Dict[Label, List[Tuple]],
+                      initial_score) -> SearchResult | None:
         """
             Performs a weighted Breadth-First Search (BFS) to find the best tuple matching a given label.
 
@@ -511,7 +485,7 @@ class Graph:
                 - Perfect rows are initialized with a score equal to the number of selected label-value pairs.
                 - If multiple tuples have the same highest score, all are included in the result.
         """
-        logger.debug(f'Finding best value for label={label.name}, row_id={source_row_id}, selected={selected.values()}')
+        logger.debug(f'Finding best value for row_id={source_row_id}, label={label}, selected={selected.values()}')
         if label not in self.buckets:
             return None
 
@@ -526,9 +500,10 @@ class Graph:
                         is_perfect(candidate.tuples, selected):
                     perfect_rows[candidate.id] = strength_selected(candidate.tuples, selected)
 
+        logger.debug(f"Perfect rows: {perfect_rows}")
         # check perfect rows first
         for row_id in perfect_rows:
-            res = self._bfs_find_best(source_row_id, row_id, label, selected, perfect_rows[row_id])
+            res = self.bfs_find_best(source_row_id, row_id, label, selected, perfect_rows[row_id])
             if res.score > best_result.score:
                 best_result = res
             elif res.score == best_result.score:
@@ -537,7 +512,7 @@ class Graph:
         if len(best_result.tuples) > 0:
             # we found a tuple from perfect rows
             logger.debug(
-                f'Found best value from perfect rows={perfect_rows}. label={label.name}, source row={source_row_id}: '
+                f'Found best value from perfect rows={perfect_rows}. label={label}, row_id={source_row_id}: '
                 f'best result={best_result}')
             return best_result
 
@@ -545,23 +520,21 @@ class Graph:
         source_row = self.rows[source_row_id]
         # get all directly connected rows with strength scores
         candidates = self.get_directly_connected_rows_with_scores(source_row)
-        # sort candidates by their scores in descending order
-        sorted_candidates = sorted(candidates, key=candidates.get, reverse=True)
-        logger.debug(f'candidates={sorted_candidates}')
+
         # we process rows in order: highest to lowest score
-        for row_id in sorted_candidates:
-            res = self._bfs_find_best(source_row_id, row_id, label, selected, candidates[row_id]
-                                      + strength_selected(self.rows[row_id].tuples, selected)
-                                      )
+        for row_id, score in candidates.items():
+            res = self.bfs_find_best(source_row_id, row_id, label, selected, score
+                                     + strength_selected(self.rows[row_id].tuples, selected)
+                                     )
             if res.score > best_result.score:
                 best_result = res
             elif res.score == best_result.score:
                 best_result.tuples.extend(res.tuples)
         if len(best_result.tuples) > 0:
             logger.debug(
-                f'Found best value for label={label.name}, row={source_row_id}: best_result{best_result}')
+                f'Found best value for label={label}, row={source_row_id}: best_result{best_result}')
         else:
-            logger.debug(f'No valid value found for label={label.name}, row={source_row_id}')
+            logger.debug(f'No valid value found for label={label}, row={source_row_id}')
 
         return best_result
 
@@ -571,7 +544,7 @@ class Graph:
             for nodes in bucket.nodes.values():
                 for n in nodes:
                     row_ids.add(n.row_id)
-            logger.debug(f'bucket {label.name} has rows: {row_ids}')
+            logger.debug(f'bucket {label} has rows: {row_ids}')
 
 
 def create_graph(rows: List[Row]) -> Graph:
@@ -655,7 +628,7 @@ def _doc_to_rows(data) -> List[Row]:
                     value=tuple_data["value"],
                     source_value=tuple_data["source_value"],
                     value_type=Type(tuple_data["value_type"]),
-                    label=Label[tuple_data["label"]],
+                    label=tuple_data["label"],
                     weight=0.0
                 )
             )
